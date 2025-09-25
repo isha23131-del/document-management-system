@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>書類提出システム</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f4f7f6; color: #333; }
+  h2 { color: #2c3e50; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; margin-top: 30px; }
+  label { display: block; margin-bottom: 5px; font-weight: bold; }
+  input[type="text"], input[type="date"], button { 
+    padding: 10px 12px; margin: 8px 0; border: 1px solid #ccc; border-radius: 5px;
+    font-size: 1rem; box-sizing: border-box; width: auto; min-width: 200px;
+  }
+  button { 
+    background-color: #3498db; color: white; cursor: pointer; border: none;
+    transition: background-color 0.3s ease;
+  }
+  button:hover { background-color: #2980b9; }
+  button.edit-btn { background-color: #f39c12; }
+  button.edit-btn:hover { background-color: #e67e22; }
+  button.submit-status-btn { background-color: #27ae60; }
+  button.submit-status-btn:hover { background-color: #2ecc71; }
+  #submitMsg { margin-left: 15px; font-weight: bold; }
+  .success { color: #28a745; }
+  .error { color: #dc3545; }
+
+  hr { border: 0; border-top: 1px solid #eee; margin: 25px 0; }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; background-color: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+  th, td { border: 1px solid #e0e0e0; padding: 12px 15px; text-align: left; }
+  th { background-color: #ecf0f1; font-weight: bold; color: #34495e; }
+  tr:nth-child(even) { background-color: #f9f9f9; }
+  tr:hover { background-color: #f0f0f0; }
+
+  .ok { background: #d1fae5; color:#065f46; padding:4px 8px; border-radius:4px; font-size: 0.9em; font-weight: bold; }
+  .ng { background: #fee2e2; color:#991b1b; padding:4px 8px; border-radius:4px; font-size: 0.9em; font-weight: bold; }
+  .overdue { color: #dc3545; font-weight: bold; } /* 期限切れ未提出を強調 */
+  .button-group { display: flex; gap: 5px; }
+
+  /* モーダルダイアログ */
+  .modal {
+    display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%;
+    overflow: auto; background-color: rgba(0,0,0,0.4); justify-content: center; align-items: center;
+  }
+  .modal-content {
+    background-color: #fefefe; margin: auto; padding: 25px; border: 1px solid #888;
+    width: 80%; max-width: 500px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    position: relative;
+  }
+  .close-button {
+    color: #aaa; float: right; font-size: 28px; font-weight: bold; position: absolute; top: 10px; right: 20px;
+  }
+  .close-button:hover, .close-button:focus { color: black; text-decoration: none; cursor: pointer; }
+  .modal-buttons { text-align: right; margin-top: 20px; }
+  .modal-buttons button { margin-left: 10px; }
+</style>
+</head>
+<body>
+
+<h2>提出フォーム</h2>
+<label for="docName">書類名:</label>
+<input id="docName" type="text" placeholder="例: 休暇届">
+<label for="dueDate">提出予定日:</label>
+<input id="dueDate" type="date">
+<button id="btnSubmit">送信</button>
+<span id="submitMsg"></span>
+
+<hr>
+
+<h2>提出履歴</h2>
+<div>
+  <label><input type="radio" name="displayOption" value="latest" checked>最新1件</label>
+  <label><input type="radio" name="displayOption" value="all">全件</label>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>氏名</th>
+      <th>書類名</th>
+      <th>提出予定日</th>
+      <th>提出日(実績)</th>
+      <th>ステータス</th>
+      <th>操作</th>
+    </tr>
+  </thead>
+  <tbody id="listBody"></tbody>
+</table>
+
+<!-- 編集モーダル -->
+<div id="editModal" class="modal">
+  <div class="modal-content">
+    <span class="close-button">&times;</span>
+    <h3>提出内容の編集</h3>
+    <label for="editDocName">書類名:</label>
+    <input id="editDocName" type="text">
+    <label for="editDueDate">提出予定日:</label>
+    <input id="editDueDate" type="date">
+    <div class="modal-buttons">
+      <button id="btnSaveEdit" class="submit-status-btn">保存</button>
+      <button id="btnCancelEdit">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const el = sel => document.querySelector(sel);
+const elAll = sel => document.querySelectorAll(sel);
+
+// 提出予定日のデフォルト値を翌月同日に設定
+function setNextMonthDate() {
+  const today = new Date();
+  const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+  const year = nextMonth.getFullYear();
+  const month = String(nextMonth.getMonth() + 1).padStart(2, '0');
+  const day = String(nextMonth.getDate()).padStart(2, '0');
+  el("#dueDate").value = `${year}-${month}-${day}`;
+}
+
+setNextMonthDate(); // ページロード時に設定
+
+function fmtBadge(status) {
+  return status === "提出済み" 
+    ? '<span class="ok">提出済み</span>' 
+    : '<span class="ng">未提出</span>';
+}
+
+el("#btnSubmit").addEventListener("click", () => {
+  const payload = {
+    docName: el("#docName").value.trim(),
+    dueDate: el("#dueDate").value
+  };
+  if (!payload.docName || !payload.dueDate) {
+    displayMessage("書類名と提出予定日を入力してください ❌", "error");
+    return;
+  }
+
+  google.script.run.withSuccessHandler(res => {
+    if (res.success) {
+      displayMessage("送信しました ✅", "success");
+      el("#docName").value = "";
+      setNextMonthDate(); // 提出予定日を再度設定
+      loadSubmissions();
+    } else {
+      displayMessage("送信に失敗 ❌", "error");
+    }
+  }).submitForm(payload);
+});
+
+function displayMessage(message, type) {
+  const msgEl = el("#submitMsg");
+  msgEl.innerText = message;
+  msgEl.className = type === "success" ? "success" : "error";
+  setTimeout(() => { msgEl.innerText = ""; msgEl.className = ""; }, 3000);
+}
+
+function loadSubmissions() {
+  const displayOption = el('input[name="displayOption"]:checked').value;
+
+  google.script.run.withSuccessHandler(rows => {
+    const tbody = el("#listBody");
+    tbody.innerHTML = "";
+
+    if (rows.length === 0) {
+      tbody.innerHTML = "<tr><td colspan='6'>提出履歴がありません</td></tr>"; // colspanを6に
+      return;
+    }
+
+    const submissionsToDisplay = (displayOption === 'latest' && rows.length > 0) 
+      ? [rows[0]]
+      : rows;
+
+    submissionsToDisplay.forEach(submission => {
+      const tr = document.createElement("tr");
+      const docNameClass = submission.isOverdue ? 'overdue' : '';
+
+      tr.innerHTML = `
+        <td>${submission.氏名}</td>
+        <td class="${docNameClass}">${submission.書類名}</td>
+        <td class="${docNameClass}">${submission.提出予定日}</td>
+        <td>${submission.提出日実績 || ''}</td>
+        <td>${fmtBadge(submission.ステータス)}</td>
+        <td>
+          ${submission.ステータス === "未提出" ? `
+            <div class="button-group">
+              <button class="edit-btn" data-rowindex="${submission.rowIndex}" 
+                      data-docname="${submission.書類名}" data-duedate="${submission.提出予定日}">編集</button>
+              <button class="submit-status-btn" data-rowindex="${submission.rowIndex}">提出</button>
+            </div>
+          ` : ''}
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    // 編集ボタンと提出ボタンのイベントリスナーを設定
+    elAll(".edit-btn").forEach(button => {
+      button.addEventListener("click", openEditModal);
+    });
+    elAll(".submit-status-btn").forEach(button => {
+      button.addEventListener("click", handleStatusUpdate);
+    });
+
+  }).getSubmissions();
+}
+
+function handleStatusUpdate(event) {
+  const rowIndex = event.target.dataset.rowindex;
+  const confirmation = confirm("この書類を提出済みにしますか？");
+  if (confirmation) {
+    const today = new Date();
+    const actualDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    
+    google.script.run.withSuccessHandler(res => {
+      if (res.success) {
+        displayMessage("ステータスを更新しました ✅", "success");
+        loadSubmissions();
+      } else {
+        displayMessage("ステータス更新に失敗 ❌", "error");
+      }
+    }).updateSubmission({
+      rowIndex: rowIndex,
+      docName: null, // 更新しない項目はnull
+      dueDate: null, // 更新しない項目はnull
+      actualDate: actualDate,
+      status: "提出済み"
+    });
+  }
+}
+
+
+// モーダル関連のDOM要素
+const editModal = el("#editModal");
+const closeButton = el(".close-button");
+const btnSaveEdit = el("#btnSaveEdit");
+const btnCancelEdit = el("#btnCancelEdit");
+const editDocNameInput = el("#editDocName");
+const editDueDateInput = el("#editDueDate");
+
+let currentEditingRowIndex = null; // 編集中の行のrowIndexを保持
+
+// 編集モーダルを開く
+function openEditModal(event) {
+  currentEditingRowIndex = event.target.dataset.rowindex;
+  editDocNameInput.value = event.target.dataset.docname;
+  editDueDateInput.value = event.target.dataset.duedate;
+  editModal.style.display = "flex"; // flexboxで中央寄せ
+}
+
+// モーダルを閉じる
+function closeEditModal() {
+  editModal.style.display = "none";
+  currentEditingRowIndex = null;
+}
+
+// イベントリスナー
+closeButton.addEventListener("click", closeEditModal);
+btnCancelEdit.addEventListener("click", closeEditModal);
+
+// モーダルの外側をクリックで閉じる
+window.addEventListener("click", (event) => {
+  if (event.target === editModal) {
+    closeEditModal();
+  }
+});
+
+// 編集内容を保存
+btnSaveEdit.addEventListener("click", () => {
+  const newDocName = editDocNameInput.value.trim();
+  const newDueDate = editDueDateInput.value;
+
+  if (!newDocName || !newDueDate) {
+    alert("書類名と提出予定日を入力してください。");
+    return;
+  }
+
+  google.script.run.withSuccessHandler(res => {
+    if (res.success) {
+      displayMessage("編集内容を保存しました ✅", "success");
+      closeEditModal();
+      loadSubmissions();
+    } else {
+      displayMessage("編集内容の保存に失敗 ❌", "error");
+    }
+  }).updateSubmission({
+    rowIndex: currentEditingRowIndex,
+    docName: newDocName,
+    dueDate: newDueDate,
+    actualDate: null, // 更新しない項目はnull
+    status: null      // 更新しない項目はnull
+  });
+});
+
+elAll('input[name="displayOption"]').forEach(radio => {
+  radio.addEventListener('change', loadSubmissions);
+});
+
+loadSubmissions(); // 最初の読み込み
+</script>
+</body>
+</html>
